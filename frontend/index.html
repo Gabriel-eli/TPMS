@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TPMS - Monitor de Pressão de Pneus</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+    <div class="header-content">
+        <div class="logo">🚗 TPMS Monitor</div>
+        <div class="header-right">
+            <div class="status-pill">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Sistema Normal</span>
+            </div>
+            <div class="status-pill">
+                🛞 <strong id="pneuCount">0</strong> pneus
+            </div>
+        </div>
+    </div>
+</header>
+
+<!-- NAVEGAÇÃO -->
+<div class="nav-bar">
+    <div class="nav-bar-inner">
+        <button class="tab-btn active" onclick="switchTab('home', this)">🏠 Home</button>
+        <button class="tab-btn" onclick="switchTab('historico', this)">📊 Gráfico</button>
+        <button class="tab-btn" onclick="switchTab('alertas', this)">⚠️ Alertas <span id="alertaBadge"></span></button>
+        <button class="tab-btn" onclick="switchTab('config', this)">⚙️ Config</button>
+    </div>
+</div>
+
+<!-- CONTEÚDO -->
+<div class="container">
+
+    <!-- HOME -->
+    <div id="home" class="tab-content active">
+        <div class="pneus-grid" id="pneusGrid"></div>
+        <div class="add-section" onclick="adicionarPneu()">
+            <h3>+ Adicionar Pneu</h3>
+            <p>Clique para monitorar um novo sensor</p>
+            <button class="btn-add">Adicionar</button>
+        </div>
+    </div>
+
+    <!-- HISTÓRICO -->
+    <div id="historico" class="tab-content">
+        <div class="historico-header">
+            <h2>📊 Gráfico em Tempo Real</h2>
+            <select class="selector-pneu" id="selectorPneu" onchange="atualizarGraficos()"></select>
+        </div>
+
+        <div class="chart-card">
+            <h3>Pressão (PSI)</h3>
+            <div class="chart-legenda">
+                <div class="legenda-item"><div class="legenda-cor" style="background:#FF8C00"></div><span>Pressão atual</span></div>
+                <div class="legenda-item"><div class="legenda-cor" style="background:#4CAF50"></div><span>Mínimo seguro</span></div>
+                <div class="legenda-item"><div class="legenda-cor" style="background:#FF5252"></div><span>Máximo seguro</span></div>
+            </div>
+            <canvas id="pressaoChart" height="80"></canvas>
+        </div>
+
+        <div class="chart-card">
+            <h3>Temperatura (°C)</h3>
+            <div class="chart-legenda">
+                <div class="legenda-item"><div class="legenda-cor" style="background:#FF6B6B"></div><span>Temperatura atual</span></div>
+            </div>
+            <canvas id="temperaturaChart" height="80"></canvas>
+        </div>
+    </div>
+
+    <!-- ALERTAS -->
+    <div id="alertas" class="tab-content">
+        <div class="alertas-header">
+            <h2>⚠️ Alertas</h2>
+            <button class="btn-limpar" onclick="limparAlertas()">Limpar todos</button>
+        </div>
+        <div id="alertasContainer"></div>
+    </div>
+
+    <!-- CONFIG -->
+    <div id="config" class="tab-content">
+        <div class="config-card">
+            <h3>⚙️ Limites de Pressão</h3>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Pressão Mínima</div>
+                    <div class="config-label-desc">Abaixo disso → alerta de pressão baixa</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <input type="number" class="config-input" id="cfgMin" value="26" min="15" max="35" onchange="sincronizarConfig()">
+                    <span style="color:var(--text-muted);font-size:13px;">PSI</span>
+                </div>
+            </div>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Pressão Máxima</div>
+                    <div class="config-label-desc">Acima disso → alerta de pressão alta</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <input type="number" class="config-input" id="cfgMax" value="41" min="35" max="70" onchange="sincronizarConfig()">
+                    <span style="color:var(--text-muted);font-size:13px;">PSI</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="config-card">
+            <h3>🔔 Notificações</h3>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Notificações do Navegador</div>
+                    <div class="config-label-desc">Pop-up quando pressão sair do limite</div>
+                </div>
+                <div class="toggle on" id="toggleNotif" onclick="this.classList.toggle('on'); notifAtiva = !notifAtiva"></div>
+            </div>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Som de Alerta</div>
+                    <div class="config-label-desc">Bipe quando houver problema</div>
+                </div>
+                <div class="toggle on" id="toggleSom" onclick="this.classList.toggle('on'); somAtivo = !somAtivo"></div>
+            </div>
+        </div>
+
+        <div class="config-card">
+            <h3>🌐 Conexão com ESP32</h3>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Endereço do ESP32</div>
+                    <div class="config-label-desc">IP do servidor HTTP embarcado</div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="text" class="config-input-url" id="cfgUrl" value="http://192.168.1.100" onchange="atualizarUrlESP32()">
+                    <button class="btn-test" onclick="testarConexaoESP32()">🔌 Testar</button>
+                </div>
+            </div>
+            <div class="config-row">
+                <div>
+                    <div class="config-label-title">Modo de Dados</div>
+                    <div class="config-label-desc">Simulado = sem hardware conectado</div>
+                </div>
+                <div class="toggle on" id="toggleSimulado" onclick="toggleModo()"></div>
+            </div>
+            <p style="font-size:12px;color:var(--text-muted);margin-top:10px;" id="modoTexto">
+                🟡 Modo simulado ativo — dados fictícios para demonstração
+            </p>
+        </div>
+    </div>
+
+</div>
+
+<!-- SCRIPTS (ordem importa!) -->
+<script src="js/config.js"></script>
+<script src="js/alertas.js"></script>
+<script src="js/graficos.js"></script>
+<script src="js/pneus.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

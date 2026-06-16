@@ -25,6 +25,9 @@ static const char *TAG = "TPMS";
 #define PRESSURE_HIGH_PSI    41.0f
 #define AVERAGE_SAMPLES     10
 
+// Escala da pressão (PSI no fundo de escala do sensor)
+#define PRESSURE_FULL_SCALE_PSI  100.0f
+
 // WiFi
 #define WIFI_SSID      "SEU_WIFI_AQUI"
 #define WIFI_PASSWORD  "SUA_SENHA_AQUI"
@@ -333,42 +336,87 @@ void app_main()
             ESP_LOGI(TAG, "P(avg): %.1f PSI | T: %.0f oC | %s",
                      avgPressure, temperature, status);
         }
+        else
+        {
+            ESP_LOGW(TAG, "SMP3011 não respondeu ou dados inválidos");
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(300));
     }
 }
 
 // ================================================
-// SMP3011
+// SMP3011 - NOVA FORMULA (buf[1:2] = pressao 16bit)
 // ================================================
 void smp3011Init()
 {
-    i2c_master_bus_add_device(i2c_sensor_bus, &i2c_smp3011_config, &i2c_smp3011_handle);
+    esp_err_t ret = i2c_master_bus_add_device(i2c_sensor_bus, &i2c_smp3011_config, &i2c_smp3011_handle);
+    
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Falha ao adicionar SMP3011 ao barramento: 0x%x", ret);
+        return;
+    }
 
+    // Envia comando de medição (0xAC)
     uint8_t cmd = 0xAC;
-    i2c_master_transmit(i2c_smp3011_handle, &cmd, 1, 20);
-
-    ESP_LOGI(TAG, "SMP3011 inicializado");
+    ret = i2c_master_transmit(i2c_smp3011_handle, &cmd, 1, 100);
+    
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Falha ao enviar comando init ao SMP3011: 0x%x", ret);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "SMP3011 inicializado com sucesso");
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 bool smp3011Poll()
 {
     uint8_t buf[6];
-    esp_err_t ret = i2c_master_receive(i2c_smp3011_handle, buf, sizeof(buf), 20);
-    if (ret != ESP_OK) return false;
+    esp_err_t ret = i2c_master_receive(i2c_smp3011_handle, buf, sizeof(buf), 100);
+    
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Erro ao receber dados do SMP3011: 0x%x", ret);
+        return false;
+    }
 
-    if ((buf[0] & 0x20) != 0) return false;
+    // Verifica status bit (bit 5 do primeiro byte deve ser 0)
+    if ((buf[0] & 0x20) != 0)
+    {
+        ESP_LOGW(TAG, "SMP3011: Medição ainda em progresso");
+        return false;
+    }
 
+    // Envia comando de medição novamente
     uint8_t cmd = 0xAC;
-    i2c_master_transmit(i2c_smp3011_handle, &cmd, 1, 20);
+    i2c_master_transmit(i2c_smp3011_handle, &cmd, 1, 100);
 
-    uint32_t rawP = ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
-    float pct = (float)rawP / 16777215.0f;
-    pct = (pct - 0.15f) / 0.7f;
-    pressure = (pct * 500000.0f) / 6894.76f;  // Pa -> PSI
+    // ============================================
+    // PRESSAO: buf[1]:buf[2] como valor 16-bit
+    // FORMULA CORRIGIDA: sensor é inversamente proporcional
+    // Calibrado: rawP=9784 → 14.7 PSI (pressão atmosférica)
+    // K = 0.147 + 9784/65536 = 0.2963
+    // Quando rawP DESCE → pressão SOBE (correto para TPMS)
+    // ============================================
+    uint32_t rawP = ((uint32_t)buf[1] << 8) | buf[2];
+    pressure = (0.2963f - (float)rawP / 65536.0f) * 100.0f;
+    if (pressure < 0.0f) pressure = 0.0f;
 
-    uint32_t rawT = ((uint32_t)buf[4] << 8) | buf[5];
+    // ============================================
+    // TEMPERATURA: buf[4]:buf[5] como valor 16-bit
+    // (formula original - ja estava correta, dava ~21-22 oC)
+    // ============================================
+    uint16_t rawT = ((uint16_t)buf[4] << 8) | buf[5];
     temperature = (190.0f * ((float)rawT / 65535.0f)) - 40.0f;
+
+    // Debug: mostra os bytes brutos junto com o resultado
+    ESP_LOGI(TAG, "raw: [%02X %02X %02X %02X %02X %02X] rawP=%lu P=%.2f PSI",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], rawP, pressure);
 
     return true;
 }
